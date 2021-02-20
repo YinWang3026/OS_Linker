@@ -7,37 +7,50 @@
 //Definitions
 typedef struct{
      char* sym;
-     int offset;
+     int absAddr;
 }Symbol;
 
 typedef struct{
-     char type;
-     int instr;
-}Instruction;
+     //Instruction* memoryInst[512]; //Machine size
+     int baseAddr; //base addr (X+1) = baseAddr(X) + len(X)
+     int length; //module size
+     int id; //module number
 
-typedef struct{
-     Instruction* memoryInst[512]; //Machine size
-     Symbol* symbolList[256];//At least 256 symbol=value pairs
+     int cap; //symbolList capacity
+     int size; //symbolList curr size
+     Symbol* symbolList; //At least 256 symbol=value pairs
 }Module;
 
 typedef struct{
-     char* symbolTable; //"Symbol Table"
-     char* memoryMap; //"Memory Map"
-     
+     char* symtable; //"Symbol Table"
+     char* memmap; //"Memory Map"
+     int cap; //moduleList capacity
+     int size; //moduleList curr size
      Module* moduleList;
-}Output;
+}SymbolTable;
 
 //Global variables
 FILE* fptr; //File pointer
 int linenum; //Current line number
 int lineoffset; //Current line offset
 int finalPosition; //Last character in the line
-Output* myOutput;
+int instrCount; //Total instr read so far, at most 512
 
 //Functions
-//Output
-void initOutput();
-void printOutput();
+//Symbols
+Symbol* createSymbol(int, char*);
+void deallocSymbol(Symbol*);
+
+//Modules
+Module* createModule();
+void deallocModule(Module*);
+void addSymbol(Symbol*);
+
+//SymbolTable
+SymbolTable* createSymbolTable();
+void deallocSymbolTable(SymbolTable*);
+void printSymbolTable(SymbolTable*);
+void addModule(Module*);
 
 //Initalization
 void initGlobalVar(const char*); //Initalizes the global vars above
@@ -78,6 +91,7 @@ void initGlobalVar(const char* filename) {
      }
      linenum = 0;
      lineoffset = 0;
+     instrCount = 0; 
 }
 
 void tokenizer(const char* filename) {
@@ -102,6 +116,7 @@ char* getToken(){
           linePtr = NULL;
           result = getline(&linePtr, &n, fptr);
           if (result < 1) { //EOF or Error in getline
+               lineoffset = finalPosition;
                return NULL;
           }
           linenum += 1; //Read a line, increment line number
@@ -240,42 +255,48 @@ void __parseerror(int errcode, int line, int offset){
      exit(-1);
 }
 
-void __nonTerminatingError(int errcode, char* sym) {
-     switch(errcode) {
-          case 0:
+void __nonTerminatingError(int errcode, Symbol* symb) {
+     switch(errcode) { //Code is based on rule number
+          case 8:
                printf("Error: Absolute address exceeds machine size; zero used");
                break;
-          case 1:
+          case 9:
                printf("Error: Relative address exceeds module size; zero used");
                break;
-          case 2:
+          case 6:
                printf("Error: External address exceeds length of uselist; treated as immediate");
                break;
           case 3:
-               printf("Error: %s is not defined; zero used", sym);
+               printf("Error: %s is not defined; zero used", symb->sym);
                break;
-          case 4:
+          case 2:
                printf("Error: This variable is multiple times defined; first value used");
                break;
-          case 5:
+          case 10:
                printf("Error: Illegal immediate value; treated as 9999");
                break;
-          case 6:
+          case 11:
                printf("Error: Illegal opcode; treated as 999");
                break;
+          default: //Incase I type in something wrong
+               printf("Invalid code.\n");
+               exit(-1);
      }
 }
 
-void __warnings(int errcode, int module, char* sym){
-     switch(errcode){
-          case 0:
-               printf("Warning: Module %d: %s too big %d (max=%d) assume zero relative\n", module, sym, symSize, moduleSize);
+void __warnings(int errcode, Module* mod, Symbol* symb){
+     switch(errcode){ //Code based on rule number
+          case 5:
+               printf("Warning: Module %d: %s too big %d (max=%d) assume zero relative\n", mod->id, symb->sym, symb->absAddr, mod->length);
                break;
-          case 1:
-               printf("Warning: Module %d: %s appeared in the uselist but was not actually used\n", module, sym);
+          case 7:
+               printf("Warning: Module %d: %s appeared in the uselist but was not actually used\n", mod->id, symb->sym);
                break;
-          case 2:
-               printf("Warning: Module %d: %s was defined but never used\n", module, sym);
+          case 4:
+               printf("Warning: Module %d: %s was defined but never used\n", mod->id, symb->sym);
                break;
+          default: //Incase I type in something wrong
+               printf("Invalid code.\n");
+               exit(-1);
      }
 }
