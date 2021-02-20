@@ -135,7 +135,7 @@ char* readSym(){
      
      sym = getToken();
      if (sym == NULL) { //EoF reached
-          return NULL;
+          __parseerror(1, linenum, finalPosition);
      }
      //Check length
      len = strlen(sym);
@@ -159,7 +159,7 @@ char readIEAR(){
 
      token = getToken();
      if (token == NULL) { //EoF reached
-          return '\0';
+          __parseerror(2, linenum, finalPosition);
      }
      if (strlen(token) != 1 || 
      !(strcmp(token,"I") == 0 || strcmp(token,"A") == 0 
@@ -185,9 +185,7 @@ void passOne() {
           }
           printf("defcount: %d\n",defCount);
           for (i=0; i<defCount; i++) {
-               if ((sym = readSym()) == NULL){
-                    __parseerror(1, linenum, finalPosition);
-               }
+               sym = readSym();
                if ((val = readInt()) == -1){
                     __parseerror(0, linenum, finalPosition);
                }
@@ -203,9 +201,7 @@ void passOne() {
           }
           printf("usecount: %d\n",useCount);
           for (i=0; i<useCount; i++){
-               if ((sym = readSym()) == NULL){
-                    __parseerror(1, linenum, finalPosition);
-               }
+               sym = readSym();
                printf("sym: %s\n", sym);
                //we don’t do anything here this would change in pass2 
           }
@@ -217,9 +213,7 @@ void passOne() {
           }
           printf("instCount: %d\n",instCount);
           for (i=0; i<instCount; i++){
-               if ((addressMode = readIEAR()) == '\0'){
-                    __parseerror(2, linenum, finalPosition);
-               }
+               addressMode = readIEAR();
                if ((operand = readInt()) == -1){
                     __parseerror(2, linenum, finalPosition);
                }
@@ -244,4 +238,44 @@ void __parseerror(int errcode, int line, int offset){
      };
      printf("Parse Error line %d offset %d: %s\n", line, offset, errstr[errcode]);
      exit(-1);
+}
+
+void __nonTerminatingError(int errcode, char* sym) {
+     switch(errcode) {
+          case 0:
+               printf("Error: Absolute address exceeds machine size; zero used");
+               break;
+          case 1:
+               printf("Error: Relative address exceeds module size; zero used");
+               break;
+          case 2:
+               printf("Error: External address exceeds length of uselist; treated as immediate");
+               break;
+          case 3:
+               printf("Error: %s is not defined; zero used", sym);
+               break;
+          case 4:
+               printf("Error: This variable is multiple times defined; first value used");
+               break;
+          case 5:
+               printf("Error: Illegal immediate value; treated as 9999");
+               break;
+          case 6:
+               printf("Error: Illegal opcode; treated as 999");
+               break;
+     }
+}
+
+void __warnings(int errcode, int module, char* sym){
+     switch(errcode){
+          case 0:
+               printf("Warning: Module %d: %s too big %d (max=%d) assume zero relative\n", module, sym, symSize, moduleSize);
+               break;
+          case 1:
+               printf("Warning: Module %d: %s appeared in the uselist but was not actually used\n", module, sym);
+               break;
+          case 2:
+               printf("Warning: Module %d: %s was defined but never used\n", module, sym);
+               break;
+     }
 }
