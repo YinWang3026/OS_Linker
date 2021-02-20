@@ -6,14 +6,14 @@
 
 //Definitions
 typedef struct{
-     char* sym;
-     int absAddr;
+     char* sym; //the symbol
+     int absAddr; //absaddr = relative addr + module base addr
 }Symbol;
 
 typedef struct{
      //Instruction* memoryInst[512]; //Machine size
      int baseAddr; //base addr (X+1) = baseAddr(X) + len(X)
-     int length; //module size
+     int length; // length = code count, module size = length - 1
      int id; //module number
 
      int cap; //symbolList capacity
@@ -33,8 +33,7 @@ typedef struct{
 FILE* fptr; //File pointer
 int linenum; //Current line number
 int lineoffset; //Current line offset
-int finalPosition; //Last character in the line
-int instrCount; //Total instr read so far, at most 512
+int totalInstr; //Total instr read so far, at most 512
 
 //Functions
 //Symbols
@@ -65,7 +64,9 @@ char readIEAR(); //Calls gettoken, should return "I,A,E,R" char
 //Parser related
 void passOne(); //First pass
 void passTwo(); //Second pass
-void __parseerror(int,int,int); //Err code, line number, offset
+void __parseerror(int); //Err code, line number, offset
+void __nonTerminatingError(int, Symbol*);
+void __warnings(int, Module*, Symbol*);
 
 
 
@@ -91,7 +92,7 @@ void initGlobalVar(const char* filename) {
      }
      linenum = 0;
      lineoffset = 0;
-     instrCount = 0; 
+     totalInstr = 0; 
 }
 
 void tokenizer(const char* filename) {
@@ -100,13 +101,14 @@ void tokenizer(const char* filename) {
      while ((temp = getToken()) != NULL){
           printf("Token: %d:%d : %s\n", linenum, lineoffset, temp);
      }
-     printf("Final Spot in File : line=%d offset=%d\n", linenum,finalPosition);
+     printf("Final Spot in File : line=%d offset=%d\n", linenum,lineoffset);
      fclose(fptr);
 }
 
 char* getToken(){
      static char* linePtr; //Need to remember the head ptr
-     size_t n = 0; //For getline size
+     static int finalPosition; //Final position of the line
+     static size_t n = 0; //For getline size
      char* token;
      int result;
 
@@ -116,7 +118,7 @@ char* getToken(){
           linePtr = NULL;
           result = getline(&linePtr, &n, fptr);
           if (result < 1) { //EOF or Error in getline
-               lineoffset = finalPosition;
+               lineoffset = finalPosition; //Setting offset to final position
                return NULL;
           }
           linenum += 1; //Read a line, increment line number
@@ -139,7 +141,7 @@ int readInt(){
      }
      result = strtol(token, &temp, 10);
      if (*temp != '\0'){ //Deference it
-          __parseerror(0, linenum, lineoffset);
+          __parseerror(0);
      }
      return result;
 }
@@ -150,20 +152,20 @@ char* readSym(){
      
      sym = getToken();
      if (sym == NULL) { //EoF reached
-          __parseerror(1, linenum, finalPosition);
+          __parseerror(1);
      }
      //Check length
      len = strlen(sym);
      if (len > 16){
-          __parseerror(3, linenum, lineoffset);
+          __parseerror(3);
      }
      //Check [a-Z][a-Z0-9]*
      if (isalpha(sym[0]) == 0){
-          __parseerror(1, linenum, lineoffset);
+          __parseerror(1);
      }
      for (i=1; i<len; i++){
           if (isalnum(sym[i]) == 0){
-               __parseerror(1, linenum, lineoffset);
+               __parseerror(1);
           }
      }
      return sym;
@@ -174,12 +176,12 @@ char readIEAR(){
 
      token = getToken();
      if (token == NULL) { //EoF reached
-          __parseerror(2, linenum, finalPosition);
+          __parseerror(2);
      }
      if (strlen(token) != 1 || 
      !(strcmp(token,"I") == 0 || strcmp(token,"A") == 0 
      ||strcmp(token,"E") == 0 || strcmp(token,"R") == 0)) {
-          __parseerror(2, linenum, lineoffset);
+          __parseerror(2);
      }
      return *token;
 }
@@ -192,47 +194,49 @@ void passOne() {
      while (1){
           //createModule();
 
+          //Reading definition list
           defCount = readInt();
           if (defCount > 16){
-               __parseerror(4, linenum, lineoffset);
+               __parseerror(4);
           } else if(defCount == -1) {
                return;
           }
-          printf("defcount: %d\n",defCount);
           for (i=0; i<defCount; i++) {
                sym = readSym();
                if ((val = readInt()) == -1){
-                    __parseerror(0, linenum, finalPosition);
+                    __parseerror(0);
                }
-               printf("sym: %s, val: %d\n", sym, val);
                //createSymbol(sym,val); //this would change in pass2
           }
 
+          //Reading use list
           useCount = readInt();
           if (useCount > 16){
-               __parseerror(5, linenum, lineoffset);
+               __parseerror(5);
           } else if(useCount == -1) {
-               __parseerror(0, linenum, finalPosition);
+               __parseerror(0);
           }
-          printf("usecount: %d\n",useCount);
           for (i=0; i<useCount; i++){
                sym = readSym();
-               printf("sym: %s\n", sym);
                //we don’t do anything here this would change in pass2 
           }
+
+          //Reading program text
           instCount = readInt();
           if (instCount > 512) {
-               __parseerror(6, linenum, lineoffset);
+               __parseerror(6);
           } else if (instCount == -1){
-               __parseerror(0, linenum, finalPosition);
+               __parseerror(0);
           }
-          printf("instCount: %d\n",instCount);
+          totalInstr += instCount;
+          if (totalInstr > 512) { //Too many instr
+               __parseerror(6);
+          }
           for (i=0; i<instCount; i++){
                addressMode = readIEAR();
                if ((operand = readInt()) == -1){
-                    __parseerror(2, linenum, finalPosition);
+                    __parseerror(2);
                }
-               printf("mode: %c, operand: %d\n",addressMode, operand);
 
                // various checks
                //this would change in pass2
@@ -241,7 +245,7 @@ void passOne() {
 }
 
 //Parse error aborts execution
-void __parseerror(int errcode, int line, int offset){
+void __parseerror(int errcode){
      static char* errstr[] = {
         "NUM_EXPECTED",
         "SYM_EXPECTED",
@@ -251,7 +255,7 @@ void __parseerror(int errcode, int line, int offset){
         "TOO_MANY_USE_IN_MODULE",
         "TOO_MANY_INSTR",
      };
-     printf("Parse Error line %d offset %d: %s\n", line, offset, errstr[errcode]);
+     printf("Parse Error line %d offset %d: %s\n", linenum, lineoffset, errstr[errcode]);
      exit(-1);
 }
 
