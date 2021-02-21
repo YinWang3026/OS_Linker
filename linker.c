@@ -174,7 +174,7 @@ void addSymbolToTable(SymbolTable* st, Symbol* s){
      st->size += 1;
      if (st->size == st->cap){
           st->cap *= 2;
-          st->symbolList = realloc(st->symbolList,st->cap);
+          st->symbolList = realloc(st->symbolList,st->cap*sizeof(Symbol*));
           if (st->symbolList == NULL){
                fprintf(stderr, "addSymbolToTable:symbolList Failed to allocate memory.\n");
                exit(-1);
