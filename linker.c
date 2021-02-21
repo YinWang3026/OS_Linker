@@ -18,8 +18,6 @@ typedef struct{
 }Module;
 
 typedef struct{
-     char* symtable; //"Symbol Table"
-     char* memmap; //"Memory Map"
      int cap; //symbolList capacity
      int size; //symbolList curr size
      Symbol** symbolList;
@@ -74,21 +72,24 @@ int main(int argc, char *argv[]) {
      printf("------\n");
      initGlobalVar(argv[1]);
      passOne();
+
+     printSymbolTable(mySymTable);
+
      cleanUp();
-     /*
-     initGlobalVar(argv[1]);
+     
+     /*initGlobalVar(argv[1]);
      passTwo();
-     fclose(fptr);*/
+     cleanUp();*/
      return 0;
 }
 
-Module* createModule(int currentModule, int currentAddr){
+Module* createModule(int currentModule, int currentBaseAddr){
      Module* mod = (Module*) malloc(sizeof(Module));
      if (mod == NULL){
-          printf(stderr, "createModule: Failed to allocate memory");
+          fprintf(stderr, "createModule: Failed to allocate memory.\n");
           exit(-1);
      }
-     mod->baseAddr = currentAddr;
+     mod->baseAddr = currentBaseAddr;
      mod->id = currentModule;
      mod->length = 0;
      return mod;
@@ -97,41 +98,49 @@ void deallocModule(Module* mod){
      free(mod);
 }
 
-Symbol* createSymbol(char* s, int addr){
-     Symbol* symb = (Symbol*)malloc(sizeof(Symbol));
-     if (symb == NULL){
-          printf(stderr, "createSymbol: Failed to allocate memory");
+Symbol* createSymbol(char* token, int addr){
+     Symbol* s = (Symbol*)malloc(sizeof(Symbol));
+     if (s == NULL){
+          fprintf(stderr, "createSymbol:s Failed to allocate memory.\n");
           exit(-1);
      }
-     symb->sym = s;
-     symb->definedAlready = 0;
-     symb->absAddr = addr;
-     return symb;
+     s->sym = (char*)malloc(17*sizeof(char)); //Max 16 characters + 1 null char
+     if (s == NULL){
+          fprintf(stderr, "createSymbol:sym Failed to allocate memory.\n");
+          exit(-1);
+     }
+     strcpy(s->sym,token);
+     s->definedAlready = 0;
+     s->absAddr = addr;
+     return s;
 }
 
-void deallocSymbol(Symbol* sym) {
-     free(sym);
+void deallocSymbol(Symbol* s) {
+     free(s->sym);
+     free(s);
 }
 
-void printSymbol(Symbol* symb){
-     printf("%s=%d",symb->sym, symb->absAddr);
+void printSymbol(Symbol* s){
+     printf("%s=%d\n",s->sym, s->absAddr);
 }
 
 SymbolTable* createSymbolTable(){
      SymbolTable* st = (SymbolTable*)malloc(sizeof(SymbolTable));
-     st->symtable = (char*)malloc(14*sizeof(char));
-     strcpy(st->symtable,"Symbol Table\n");
-     st->memmap = (char*)malloc(12*sizeof(char));
-     strcpy(st->symtable,"Memory Map\n");
+     if (st == NULL){
+          fprintf(stderr, "createSymbolTable:st Failed to allocate memory.\n");
+          exit(-1);
+     }
      st->cap = 1;
      st->size = 0;
      st->symbolList = (Symbol**)malloc(st->cap*sizeof(Symbol*));
+     if (st->symbolList == NULL){
+          fprintf(stderr, "createSymbolTable:symbolList Failed to allocate memory.\n");
+          exit(-1);
+     }
      return st;
 }
 
 void deallocSymbolTable(SymbolTable* st){
-     free(st->symtable);
-     free(st->memmap);
      int i;
      for (i = 0; i<st->size; i++){
           deallocSymbol(st->symbolList[i]);
@@ -141,9 +150,11 @@ void deallocSymbolTable(SymbolTable* st){
 
 void printSymbolTable(SymbolTable* st){
      int i;
+     printf("Symbol Table\n");
      for (i = 0; i<st->size; i++){
           printSymbol(st->symbolList[i]);
      }
+     printf("Memory Map\n");
 }
 
 void addSymbolToTable(SymbolTable* st, Symbol* s){
@@ -152,6 +163,10 @@ void addSymbolToTable(SymbolTable* st, Symbol* s){
      if (st->size == st->cap){
           st->cap *= 2;
           st->symbolList = realloc(st->symbolList,st->cap);
+          if (st->symbolList == NULL){
+               fprintf(stderr, "addSymbolToTable:symbolList Failed to allocate memory.\n");
+               exit(-1);
+          }
      }
 }
 
@@ -168,7 +183,7 @@ void initGlobalVar(const char* filename) {
 }
 
 void cleanUp(){
-     close(fptr);
+     fclose(fptr);
      deallocSymbolTable(mySymTable);
 }
 
@@ -179,7 +194,7 @@ void tokenizer(const char* filename) {
           printf("Token: %d:%d : %s\n", linenum, lineoffset, temp);
      }
      printf("Final Spot in File : line=%d offset=%d\n", linenum,lineoffset);
-     fclose(fptr);
+     cleanUp();
 }
 
 char* getToken(){
@@ -332,7 +347,8 @@ void passOne() {
 
 
 void passTwo() {
-     int defCount, useCount, instCount, i, val, operand, currentBaseAddr, currentModule;
+
+     /*int defCount, useCount, instCount, i, val, operand, currentBaseAddr, currentModule;
      char addressMode;
      char* symToken;
      Symbol* symbol;
@@ -395,7 +411,7 @@ void passTwo() {
           }
           deallocModule(mod); //The module is removed
           currentModule += 1;
-     } 
+     } */
 }
 
 //Parse error aborts execution
