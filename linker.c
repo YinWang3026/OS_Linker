@@ -8,7 +8,9 @@
 typedef struct{
      char* sym; //the symbol
      int absAddr; //absaddr = relative addr + module base addr
+     int relAddr; //relative addr
      int definedAlready; //If true, print error
+     int used; //Was this symbol used
 }Symbol;
 
 typedef struct{
@@ -32,7 +34,7 @@ int totalInstr; //Total instr read so far, at most 512
 
 //Functions
 //Symbols
-Symbol* createSymbol(char*,int);
+Symbol* createSymbol(char*);
 void deallocSymbol(Symbol*);
 void printSymbol(Symbol*);
 
@@ -63,23 +65,21 @@ void passTwo(); //Second pass
 void __parseerror(int); //Err code, line number, offset
 void __nonTerminatingError(int, Symbol*);
 void __warnings(int, Module*, Symbol*);
+void rule5Violation(int, Module*);
 
 
 
 int main(int argc, char *argv[]) {
 
-     tokenizer(argv[1]);
-     printf("------\n");
+     //tokenizer(argv[1]);
+     //printf("------\n");
      initGlobalVar(argv[1]);
      passOne();
-
-     printSymbolTable(mySymTable);
-
      cleanUp();
      
-     /*initGlobalVar(argv[1]);
+     initGlobalVar(argv[1]);
      passTwo();
-     cleanUp();*/
+     cleanUp();
      return 0;
 }
 
@@ -98,7 +98,7 @@ void deallocModule(Module* mod){
      free(mod);
 }
 
-Symbol* createSymbol(char* token, int addr){
+Symbol* createSymbol(char* token){
      Symbol* s = (Symbol*)malloc(sizeof(Symbol));
      if (s == NULL){
           fprintf(stderr, "createSymbol:s Failed to allocate memory.\n");
@@ -111,7 +111,9 @@ Symbol* createSymbol(char* token, int addr){
      }
      strcpy(s->sym,token);
      s->definedAlready = 0;
-     s->absAddr = addr;
+     s->absAddr = 0;
+     s->relAddr = 0;
+     s->used = 0;
      return s;
 }
 
@@ -121,7 +123,11 @@ void deallocSymbol(Symbol* s) {
 }
 
 void printSymbol(Symbol* s){
-     printf("%s=%d\n",s->sym, s->absAddr);
+     printf("%s=%d ",s->sym, s->absAddr);
+     if (s->definedAlready == 1){ //Rule 2 violation, already defined
+          __nonTerminatingError(2,NULL);
+     }
+     printf("\n");
 }
 
 SymbolTable* createSymbolTable(){
@@ -130,8 +136,8 @@ SymbolTable* createSymbolTable(){
           fprintf(stderr, "createSymbolTable:st Failed to allocate memory.\n");
           exit(-1);
      }
-     st->cap = 1;
-     st->size = 0;
+     st->cap = 2; //starting cap
+     st->size = 0; //empty start
      st->symbolList = (Symbol**)malloc(st->cap*sizeof(Symbol*));
      if (st->symbolList == NULL){
           fprintf(stderr, "createSymbolTable:symbolList Failed to allocate memory.\n");
@@ -158,6 +164,16 @@ void printSymbolTable(SymbolTable* st){
 }
 
 void addSymbolToTable(SymbolTable* st, Symbol* s){
+     //Check if symbol already in table
+     //If yes, mark defined and return
+     int i;
+     for (i = 0; i<st->size; i++){
+          if (strcmp(st->symbolList[i]->sym,s->sym)==0){ //Found a match
+               st->symbolList[i]->definedAlready = 1; //Set to true
+               return;
+          }
+     }
+     //Else insert it
      st->symbolList[st->size] = s;
      st->size += 1;
      if (st->size == st->cap){
@@ -278,8 +294,20 @@ char readIEAR(){
      return *token;
 }
 
+void rule5Violation(int indexOffset, Module* mod){
+     int i;
+     for (i = mySymTable->size-indexOffset; i<mySymTable->size; i++){
+          //Checking if rel addr > mod length - 1
+          if (mySymTable->symbolList[i]->relAddr > (mod->length)-1){
+               __warnings(5,mod,mySymTable->symbolList[i]);
+               mySymTable->symbolList[i]->relAddr = 0;
+               mySymTable->symbolList[i]->absAddr = mod->baseAddr;
+          }
+     }
+}
+
 void passOne() {
-     int defCount, useCount, instCount, i, val, operand, currentBaseAddr, currentModule;
+     int defCount, useCount, instCount, i, rel, operand, currentBaseAddr, currentModule;
      char addressMode;
      char* symToken;
      Symbol* symbol;
@@ -290,7 +318,7 @@ void passOne() {
      while (1){
           mod = createModule(currentModule, currentBaseAddr);
        
-          //Reading definition list
+          //Reading defList
           defCount = readInt();
           if (defCount > 16){
                __parseerror(4);
@@ -299,15 +327,15 @@ void passOne() {
           }
           for (i=0; i<defCount; i++) {
                symToken = readSym();
-               symbol = createSymbol(symToken,0);
-               if ((val = readInt()) == -1){
+               symbol = createSymbol(symToken);
+               if ((rel = readInt()) == -1){
                     __parseerror(0);
                }
-               symbol->absAddr = val+currentBaseAddr; //abs addr = module base + relative
+               symbol->relAddr = rel; //Relative addr
+               symbol->absAddr = rel + currentBaseAddr; //Abs addr = Rel + Base
                addSymbolToTable(mySymTable, symbol);
           }
-
-          //Reading use list
+          //Reading useList
           useCount = readInt();
           if (useCount > 16){
                __parseerror(5);
@@ -316,6 +344,7 @@ void passOne() {
           }
           for (i=0; i<useCount; i++){
                symToken = readSym();
+               //Do nothing else
           }
 
           //Reading program text
@@ -325,30 +354,28 @@ void passOne() {
           } else if (instCount == -1){
                __parseerror(0);
           }
-          mod->length = instCount;
-          currentBaseAddr += instCount; //Update base addr for next module
-          totalInstr += instCount;
+          totalInstr += instCount; //Counting total instr so far in the input
           if (totalInstr > 512) { //Too many instr
                __parseerror(6);
           }
+
+          mod->length = instCount; //Setting mod length
           for (i=0; i<instCount; i++){
                addressMode = readIEAR();
                if ((operand = readInt()) == -1){
                     __parseerror(2);
                }
-
-               // various checks
-               //this would change in pass2
+               //Feels like nothing to do here for pass 1 also
           }
+          rule5Violation(defCount,mod);
           deallocModule(mod); //The module is removed
-          currentModule += 1;
+          currentModule += 1; //Updating module number
+          currentBaseAddr += instCount; //Update base addr for next module
      } 
 }
 
-
 void passTwo() {
-
-     /*int defCount, useCount, instCount, i, val, operand, currentBaseAddr, currentModule;
+     int defCount, useCount, instCount, i, rel, operand, currentBaseAddr, currentModule;
      char addressMode;
      char* symToken;
      Symbol* symbol;
@@ -356,62 +383,41 @@ void passTwo() {
 
      currentBaseAddr = 0; //Base addr starts from 0
      currentModule = 1; //Module number starts from 1
+     
+     printSymbolTable(mySymTable); //Starting the printing process
      while (1){
           mod = createModule(currentModule, currentBaseAddr);
        
-          //Reading definition list
+          //Reading defList
           defCount = readInt();
-          if (defCount > 16){
-               __parseerror(4);
-          } else if(defCount == -1) {
+          if(defCount == -1) {
                return; //EoF
           }
           for (i=0; i<defCount; i++) {
                symToken = readSym();
-               symbol = createSymbol(symToken,0);
-               if ((val = readInt()) == -1){
-                    __parseerror(0);
-               }
-               symbol->absAddr = val+currentBaseAddr; //abs addr = module base + relative
-               addSymbolToTable(mySymTable, symbol);
+               rel = readInt();
+               //Feels like nothing to do here for pass 2
           }
 
-          //Reading use list
+          //Reading useList
           useCount = readInt();
-          if (useCount > 16){
-               __parseerror(5);
-          } else if(useCount == -1) {
-               __parseerror(0);
-          }
           for (i=0; i<useCount; i++){
                symToken = readSym();
+               //Need to maintain a use list
           }
 
           //Reading program text
           instCount = readInt(); //module length
-          if (instCount > 512) {
-               __parseerror(6);
-          } else if (instCount == -1){
-               __parseerror(0);
-          }
-          mod->length = instCount;
-          currentBaseAddr += instCount; //Update base addr for next module
-          totalInstr += instCount;
-          if (totalInstr > 512) { //Too many instr
-               __parseerror(6);
-          }
+          mod->length = instCount; //Setting mod length
           for (i=0; i<instCount; i++){
                addressMode = readIEAR();
-               if ((operand = readInt()) == -1){
-                    __parseerror(2);
-               }
-
-               // various checks
-               //this would change in pass2
+               operand = readInt();
+               //Math time.
           }
           deallocModule(mod); //The module is removed
-          currentModule += 1;
-     } */
+          currentModule += 1; //Updating module number
+          currentBaseAddr += instCount; //Update base addr for next module
+     } 
 }
 
 //Parse error aborts execution
@@ -429,47 +435,47 @@ void __parseerror(int errcode){
      exit(-1);
 }
 
-void __nonTerminatingError(int errcode, Symbol* symb) {
+void __nonTerminatingError(int errcode, Symbol* s) {
      switch(errcode) { //Code is based on rule number
           case 8:
-               printf("Error: Absolute address exceeds machine size; zero used");
+               printf("Error: Absolute address exceeds machine size; zero used\n");
                break;
           case 9:
-               printf("Error: Relative address exceeds module size; zero used");
+               printf("Error: Relative address exceeds module size; zero used\n");
                break;
           case 6:
-               printf("Error: External address exceeds length of uselist; treated as immediate");
+               printf("Error: External address exceeds length of uselist; treated as immediate\n");
                break;
           case 3:
-               printf("Error: %s is not defined; zero used", symb->sym);
+               printf("Error: %s is not defined; zero used\n", s->sym);
                break;
           case 2:
-               printf("Error: This variable is multiple times defined; first value used");
+               printf("Error: This variable is multiple times defined; first value used\n");
                break;
           case 10:
-               printf("Error: Illegal immediate value; treated as 9999");
+               printf("Error: Illegal immediate value; treated as 9999\n");
                break;
           case 11:
-               printf("Error: Illegal opcode; treated as 999");
+               printf("Error: Illegal opcode; treated as 999\n");
                break;
-          default: //Incase I type in something wrong
+          default: //Incase I type in something wrong and cant figure out why
                printf("Invalid code.\n");
                exit(-1);
      }
 }
 
-void __warnings(int errcode, Module* mod, Symbol* symb){
+void __warnings(int errcode, Module* mod, Symbol* s){
      switch(errcode){ //Code based on rule number
           case 5:
-               printf("Warning: Module %d: %s too big %d (max=%d) assume zero relative\n", mod->id, symb->sym, symb->absAddr, mod->length);
+               printf("Warning: Module %d: %s too big %d (max=%d) assume zero relative\n", mod->id, s->sym, s->relAddr, mod->length-1);
                break;
           case 7:
-               printf("Warning: Module %d: %s appeared in the uselist but was not actually used\n", mod->id, symb->sym);
+               printf("Warning: Module %d: %s appeared in the uselist but was not actually used\n", mod->id, s->sym);
                break;
           case 4:
-               printf("Warning: Module %d: %s was defined but never used\n", mod->id, symb->sym);
+               printf("Warning: Module %d: %s was defined but never used\n", mod->id, s->sym);
                break;
-          default: //Incase I type in something wrong
+          default:
                printf("Invalid code.\n");
                exit(-1);
      }
