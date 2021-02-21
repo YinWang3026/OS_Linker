@@ -1,5 +1,5 @@
 #include "stdio.h" //fopen, fclose, printf, getline
-#include "string.h" //strlen, strtok
+#include "string.h" //strlen, strtok, strcpy
 #include "stdlib.h"
 #include "errno.h"
 #include "ctype.h" //isdigit(), isalpha(), isalnum()
@@ -7,8 +7,8 @@
 //Definitions
 typedef struct{
      int baseAddr; //base addr (X+1) = baseAddr(X) + len(X)
-     //int length; // length = code count, module size = length - 1
      int id;
+     // length = code count, module size = length - 1
 }Module;
 
 typedef struct{
@@ -23,14 +23,8 @@ typedef struct{
 typedef struct{
      int cap; //symbolList capacity
      int size; //symbolList curr size
-     Symbol** symbolList;
+     Symbol** symbolList; //Symbol array
 }SymbolTable;
-
-typedef struct{
-     char** tokens;
-     int size;
-     int cap;
-}UseList;
 
 //Global variables
 FILE* fptr; //File pointer
@@ -48,14 +42,10 @@ void printSymbol(Symbol*);
 //SymbolTable
 SymbolTable* createSymbolTable();
 void deallocSymbolTable(SymbolTable*);
-void printSymbolTable(SymbolTable*);
+void printSymbolTable(SymbolTable*); //Adds titles
 void addSymbolToTable(SymbolTable*, Symbol*);
-Symbol* findSymbolInTable(SymbolTable* st, char* token);
-
-//UseList
-UseList* createUseList();
-void deallocUseList(UseList*);
-void addToUseList(UseList* u, char* token);
+Symbol* findSymbolInTable(SymbolTable*, char*);
+void printSymbolTableSyms(SymbolTable* st); //Just prints the sym=val
 
 //Initalization
 void initGlobalVar(const char*); //Initalizes the global vars above
@@ -71,10 +61,11 @@ char readIEAR(); //Calls gettoken, should return "I,A,E,R" char
 void passOne(); //First pass
 void passTwo(); //Second pass
 void __parseerror(int); //Err code, line number, offset
-void __nonTerminatingError(int, Symbol*);
+void __nonTerminatingError(int, char*);
 void __warnings(int, int, Symbol*);
 void rule5Violation(int indexOffset, int length); //length = size of module
 void rule4Violation();
+void rule7Violation(SymbolTable*);
 
 int main(int argc, char *argv[]) {
 
@@ -158,6 +149,7 @@ void deallocSymbolTable(SymbolTable* st){
      for (i = 0; i<st->size; i++){
           deallocSymbol(st->symbolList[i]);
      }
+     free(st->symbolList);
      free(st);
 }
 
@@ -168,6 +160,14 @@ void printSymbolTable(SymbolTable* st){
           printSymbol(st->symbolList[i]);
      }
      printf("\nMemory Map\n");
+}
+
+void printSymbolTableSyms(SymbolTable* st){
+     int i;
+     printf("Symbol in use list ---\n");
+     for (i = 0; i<st->size; i++){
+          printSymbol(st->symbolList[i]);
+     }
 }
 
 Symbol* findSymbolInTable(SymbolTable* st, char* token){
@@ -202,13 +202,6 @@ void addSymbolToTable(SymbolTable* st, Symbol* s){
                exit(-1);
           }
      }
-}
-
-
-UseList* createUseList();
-void deallocUseList(UseList*);
-void addToUseList(UseList* u, char* token){
-     
 }
 
 void tokenizer(const char* filename) {
@@ -303,10 +296,7 @@ char readIEAR(){
 }
 
 void passOne() {
-     int defCount, useCount, moduleSize, i, rel, operand, currentBaseAddr, currentModule;
-     //char addressMode;
-     char* symToken;
-     Symbol* symbol;
+     int defCount, useCount, moduleSize, i, rel, currentBaseAddr, currentModule;
      Module mod;
 
      currentBaseAddr = 0; //Base addr starts from 0
@@ -324,8 +314,8 @@ void passOne() {
                break; //EoF break loop
           }
           for (i=0; i<defCount; i++) {
-               symToken = readSym();
-               symbol = createSymbol(symToken,mod);
+               char* symToken = readSym();
+               Symbol* symbol = createSymbol(symToken,mod);
                if ((rel = readInt()) == -1){
                     __parseerror(0);
                }
@@ -333,6 +323,7 @@ void passOne() {
                symbol->absAddr = rel + currentBaseAddr; //Abs addr = Rel + Base
                addSymbolToTable(mySymTable, symbol);
           }
+
           //Reading useList
           useCount = readInt();
           if (useCount > 16){
@@ -341,7 +332,7 @@ void passOne() {
                __parseerror(0);
           }
           for (i=0; i<useCount; i++){
-               symToken = readSym();
+               readSym(); //Discarding return value
                //Do nothing else
           }
 
@@ -358,11 +349,12 @@ void passOne() {
           }
           for (i=0; i<moduleSize; i++){
                readIEAR(); //Discarding return value
-               if ((operand = readInt()) == -1){
+               if (readInt() == -1){
                     __parseerror(2);
                }
                //Feels like nothing to do here for pass 1 also
           }
+
           rule5Violation(defCount,moduleSize);
           currentModule += 1; //Updating module number
           currentBaseAddr += moduleSize; //Update base addr for next module
@@ -370,20 +362,19 @@ void passOne() {
 }
 
 void passTwo() {
-     int defCount, useCount, moduleSize, i, currentBaseAddr, currentModule, instCount,op, opcode, operand;
-     char addressMode;
-     char* symToken;
+     int defCount, useCount, moduleSize, i, currentBaseAddr, currentModule, instCount;
+     SymbolTable* useList; //Holds symbols in use list
      Module mod;
 
-     instCount = 0;
+     instCount = 0; //Instruction counter
      currentBaseAddr = 0; //Base addr starts from 0
      currentModule = 1; //Module number starts from 1
      
      printSymbolTable(mySymTable); //Starting the printing process
      while (1){
-          //Createmodule()
+          //Module init
           mod.baseAddr = currentBaseAddr;
-          mod.id = currentModule;   
+          mod.id = currentModule;  
 
           //Reading defList
           defCount = readInt();
@@ -398,46 +389,129 @@ void passTwo() {
           }
 
           //Reading useList
+          useList = createSymbolTable(); //use list init
           useCount = readInt();
           for (i=0; i<useCount; i++){
-               Symbol* symbol;
-               symToken = readSym();
-               symbol = findSymbolInTable(mySymTable,symToken);
-               if (symbol == NULL){
-                    printf("sym: %s is not defined\n",symToken);
-               } else{
-                    symbol->used = 1; //Set used
-               }
-               //Need to maintain a use list
+               //Adding token to uselist
+               char* symToken = readSym();
+               Symbol* symbol = createSymbol(symToken, mod);
+               addSymbolToTable(useList,symbol);
           }
+          //printSymbolTableSyms(useList);
 
           //Reading program text
           moduleSize = readInt(); //module length
           for (i=0; i<moduleSize; i++){
-
+               char addressMode;
+               int op, opcode, operand, errcode;
+               char* errsym;
+               
                addressMode = readIEAR();
                op = readInt();
                opcode = op/1000;
                operand = op%1000;
+               errcode = -1;
+               errsym = NULL;
+
                switch (addressMode)
                {
                case 'I':
+                    //Rule 10 violated?
+                    if (op >= 10000) {
+                         op = 9999;
+                         opcode = op/1000;
+                         operand = op%1000;
+                         errcode = 10;
+                    }
                     break;
                case 'E':
+                    //Is rule 11 violated?
+                    if (opcode >= 10) {
+                         op = 9999;
+                         opcode = op/1000;
+                         operand = op%1000;
+                         errcode = 11;
+                         break;
+                    }
+                    //operand = index of symbol in uselist
+                    //Rule 6 violated?
+                    if (operand > useList->size){
+                         errcode = 6;
+                         break;
+                    }
+                    //Rule 3 violated?
+                    //Is the use token defined?
+                    Symbol* ulSymbol = useList->symbolList[operand];
+                    Symbol* stSymbol = findSymbolInTable(mySymTable,ulSymbol->sym);
+                    if (stSymbol == NULL){
+                         //Using a symbol not defined
+                         errcode = 3; //Set err
+                         operand = 0; //Using abs zero
+                         ulSymbol->used = 1; //Setting this to used
+                         errsym = ulSymbol->sym;
+                    } else{
+                         stSymbol->used = 1; //stSymbol used
+                         ulSymbol->used = 1; //ulSymbol used
+                         operand = stSymbol->absAddr; //Change operand
+                    }
                     break;
                case 'A':
+                    //Is rule 11 violated?
+                    if (opcode >= 10) {
+                         op = 9999;
+                         opcode = op/1000;
+                         operand = op%1000;
+                         errcode = 11;
+                         break;
+                    }
+                    //Rule 8 violated?
+                    if (operand > 512){
+                         operand = 0;
+                         errcode = 8;
+                    }
                     break;
                case 'R':
+                    //Is rule 11 violated?
+                    if (opcode >= 10) {
+                         op = 9999;
+                         opcode = op/1000;
+                         operand = op%1000;
+                         errcode = 11;
+                         break;
+                    }
+                    //Rule 9 violated?
+                    if (operand > moduleSize) {
+                         errcode = 9;
+                         operand = currentBaseAddr;
+                    } else{
+                         operand += currentBaseAddr;
+                    }
                     break;
                }
                op = opcode*1000 + operand;
-               printf("%d: %d\n",instCount, op);
+               printf("%03d: %04d ",instCount, op);
+               if (errcode != -1){
+                    __nonTerminatingError(errcode, errsym);
+               } else{
+                    printf("\n");
+               }
                instCount += 1;
           }
+          rule7Violation(useList);
+          deallocSymbolTable(useList); //Destorying the use list for this module
           currentModule += 1; //Updating module number
           currentBaseAddr += moduleSize; //Update base addr for next module
      }
      rule4Violation();
+}
+
+void rule7Violation(SymbolTable* ul){
+     int i;
+     for (i=0; i<ul->size; i++){
+          if (ul->symbolList[i]->used == 0){
+               __warnings(7,0,ul->symbolList[i]);
+          }
+     }
 }
 
 void rule5Violation(int indexOffset, int length){ 
@@ -480,7 +554,7 @@ void __parseerror(int errcode){
      exit(-1);
 }
 
-void __nonTerminatingError(int errcode, Symbol* s) {
+void __nonTerminatingError(int errcode, char* s) {
      switch(errcode) { //Code is based on rule number
           case 8:
                printf("Error: Absolute address exceeds machine size; zero used\n");
@@ -492,7 +566,7 @@ void __nonTerminatingError(int errcode, Symbol* s) {
                printf("Error: External address exceeds length of uselist; treated as immediate\n");
                break;
           case 3:
-               printf("Error: %s is not defined; zero used\n", s->sym);
+               printf("Error: %s is not defined; zero used\n", s);
                break;
           case 2:
                printf("Error: This variable is multiple times defined; first value used\n");
@@ -501,7 +575,7 @@ void __nonTerminatingError(int errcode, Symbol* s) {
                printf("Error: Illegal immediate value; treated as 9999\n");
                break;
           case 11:
-               printf("Error: Illegal opcode; treated as 999\n");
+               printf("Error: Illegal opcode; treated as 9999\n");
                break;
           default: //Incase I type in something wrong and cant figure out why
                printf("\n");
