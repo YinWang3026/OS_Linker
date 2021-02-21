@@ -8,51 +8,49 @@
 typedef struct{
      char* sym; //the symbol
      int absAddr; //absaddr = relative addr + module base addr
+     int definedAlready; //If true, print error
 }Symbol;
 
 typedef struct{
-     //Instruction* memoryInst[512]; //Machine size
      int baseAddr; //base addr (X+1) = baseAddr(X) + len(X)
      int length; // length = code count, module size = length - 1
-     int id; //module number
-
-     int cap; //symbolList capacity
-     int size; //symbolList curr size
-     Symbol* symbolList; //At least 256 symbol=value pairs
+     int id;
 }Module;
 
 typedef struct{
      char* symtable; //"Symbol Table"
      char* memmap; //"Memory Map"
-     int cap; //moduleList capacity
-     int size; //moduleList curr size
-     Module* moduleList;
+     int cap; //symbolList capacity
+     int size; //symbolList curr size
+     Symbol** symbolList;
 }SymbolTable;
 
 //Global variables
 FILE* fptr; //File pointer
+SymbolTable* mySymTable;
 int linenum; //Current line number
 int lineoffset; //Current line offset
 int totalInstr; //Total instr read so far, at most 512
 
 //Functions
 //Symbols
-Symbol* createSymbol(int, char*);
+Symbol* createSymbol(char*,int);
 void deallocSymbol(Symbol*);
+void printSymbol(Symbol*);
 
 //Modules
-Module* createModule();
+Module* createModule(int,int);
 void deallocModule(Module*);
-void addSymbol(Symbol*);
 
 //SymbolTable
 SymbolTable* createSymbolTable();
 void deallocSymbolTable(SymbolTable*);
 void printSymbolTable(SymbolTable*);
-void addModule(Module*);
+void addSymbolToTable(SymbolTable*, Symbol*);
 
 //Initalization
 void initGlobalVar(const char*); //Initalizes the global vars above
+void cleanUp(); //Opposite of init global
 
 //Token related
 char* getToken(); //Gets tokens from input file
@@ -76,12 +74,85 @@ int main(int argc, char *argv[]) {
      printf("------\n");
      initGlobalVar(argv[1]);
      passOne();
-     fclose(fptr);
-/*
+     cleanUp();
+     /*
      initGlobalVar(argv[1]);
      passTwo();
      fclose(fptr);*/
      return 0;
+}
+
+Module* createModule(int currentModule, int currentAddr){
+     Module* mod = (Module*) malloc(sizeof(Module));
+     if (mod == NULL){
+          printf(stderr, "createModule: Failed to allocate memory");
+          exit(-1);
+     }
+     mod->baseAddr = currentAddr;
+     mod->id = currentModule;
+     mod->length = 0;
+     return mod;
+}
+void deallocModule(Module* mod){
+     free(mod);
+}
+
+Symbol* createSymbol(char* s, int addr){
+     Symbol* symb = (Symbol*)malloc(sizeof(Symbol));
+     if (symb == NULL){
+          printf(stderr, "createSymbol: Failed to allocate memory");
+          exit(-1);
+     }
+     symb->sym = s;
+     symb->definedAlready = 0;
+     symb->absAddr = addr;
+     return symb;
+}
+
+void deallocSymbol(Symbol* sym) {
+     free(sym);
+}
+
+void printSymbol(Symbol* symb){
+     printf("%s=%d",symb->sym, symb->absAddr);
+}
+
+SymbolTable* createSymbolTable(){
+     SymbolTable* st = (SymbolTable*)malloc(sizeof(SymbolTable));
+     st->symtable = (char*)malloc(14*sizeof(char));
+     strcpy(st->symtable,"Symbol Table\n");
+     st->memmap = (char*)malloc(12*sizeof(char));
+     strcpy(st->symtable,"Memory Map\n");
+     st->cap = 1;
+     st->size = 0;
+     st->symbolList = (Symbol**)malloc(st->cap*sizeof(Symbol*));
+     return st;
+}
+
+void deallocSymbolTable(SymbolTable* st){
+     free(st->symtable);
+     free(st->memmap);
+     int i;
+     for (i = 0; i<st->size; i++){
+          deallocSymbol(st->symbolList[i]);
+     }
+     free(st);
+}
+
+void printSymbolTable(SymbolTable* st){
+     int i;
+     for (i = 0; i<st->size; i++){
+          printSymbol(st->symbolList[i]);
+     }
+}
+
+void addSymbolToTable(SymbolTable* st, Symbol* s){
+     st->symbolList[st->size] = s;
+     st->size += 1;
+     if (st->size == st->cap){
+          st->cap *= 2;
+          st->symbolList = realloc(st->symbolList,st->cap);
+     }
 }
 
 void initGlobalVar(const char* filename) {
@@ -90,9 +161,15 @@ void initGlobalVar(const char* filename) {
           fprintf(stderr, "Cannot open file: %s.\n", filename);
           exit(-1);
      }
+     mySymTable = createSymbolTable();
      linenum = 0;
      lineoffset = 0;
-     totalInstr = 0; 
+     totalInstr = 0;
+}
+
+void cleanUp(){
+     close(fptr);
+     deallocSymbolTable(mySymTable);
 }
 
 void tokenizer(const char* filename) {
@@ -187,26 +264,32 @@ char readIEAR(){
 }
 
 void passOne() {
-     int defCount, useCount, instCount, i, val, operand;
+     int defCount, useCount, instCount, i, val, operand, currentBaseAddr, currentModule;
      char addressMode;
-     char* sym;
+     char* symToken;
+     Symbol* symbol;
+     Module* mod;
 
+     currentBaseAddr = 0; //Base addr starts from 0
+     currentModule = 1; //Module number starts from 1
      while (1){
-          //createModule();
-
+          mod = createModule(currentModule, currentBaseAddr);
+       
           //Reading definition list
           defCount = readInt();
           if (defCount > 16){
                __parseerror(4);
           } else if(defCount == -1) {
-               return;
+               return; //EoF
           }
           for (i=0; i<defCount; i++) {
-               sym = readSym();
+               symToken = readSym();
+               symbol = createSymbol(symToken,0);
                if ((val = readInt()) == -1){
                     __parseerror(0);
                }
-               //createSymbol(sym,val); //this would change in pass2
+               symbol->absAddr = val+currentBaseAddr; //abs addr = module base + relative
+               addSymbolToTable(mySymTable, symbol);
           }
 
           //Reading use list
@@ -217,17 +300,18 @@ void passOne() {
                __parseerror(0);
           }
           for (i=0; i<useCount; i++){
-               sym = readSym();
-               //we don’t do anything here this would change in pass2 
+               symToken = readSym();
           }
 
           //Reading program text
-          instCount = readInt();
+          instCount = readInt(); //module length
           if (instCount > 512) {
                __parseerror(6);
           } else if (instCount == -1){
                __parseerror(0);
           }
+          mod->length = instCount;
+          currentBaseAddr += instCount; //Update base addr for next module
           totalInstr += instCount;
           if (totalInstr > 512) { //Too many instr
                __parseerror(6);
@@ -241,6 +325,76 @@ void passOne() {
                // various checks
                //this would change in pass2
           }
+          deallocModule(mod); //The module is removed
+          currentModule += 1;
+     } 
+}
+
+
+void passTwo() {
+     int defCount, useCount, instCount, i, val, operand, currentBaseAddr, currentModule;
+     char addressMode;
+     char* symToken;
+     Symbol* symbol;
+     Module* mod;
+
+     currentBaseAddr = 0; //Base addr starts from 0
+     currentModule = 1; //Module number starts from 1
+     while (1){
+          mod = createModule(currentModule, currentBaseAddr);
+       
+          //Reading definition list
+          defCount = readInt();
+          if (defCount > 16){
+               __parseerror(4);
+          } else if(defCount == -1) {
+               return; //EoF
+          }
+          for (i=0; i<defCount; i++) {
+               symToken = readSym();
+               symbol = createSymbol(symToken,0);
+               if ((val = readInt()) == -1){
+                    __parseerror(0);
+               }
+               symbol->absAddr = val+currentBaseAddr; //abs addr = module base + relative
+               addSymbolToTable(mySymTable, symbol);
+          }
+
+          //Reading use list
+          useCount = readInt();
+          if (useCount > 16){
+               __parseerror(5);
+          } else if(useCount == -1) {
+               __parseerror(0);
+          }
+          for (i=0; i<useCount; i++){
+               symToken = readSym();
+          }
+
+          //Reading program text
+          instCount = readInt(); //module length
+          if (instCount > 512) {
+               __parseerror(6);
+          } else if (instCount == -1){
+               __parseerror(0);
+          }
+          mod->length = instCount;
+          currentBaseAddr += instCount; //Update base addr for next module
+          totalInstr += instCount;
+          if (totalInstr > 512) { //Too many instr
+               __parseerror(6);
+          }
+          for (i=0; i<instCount; i++){
+               addressMode = readIEAR();
+               if ((operand = readInt()) == -1){
+                    __parseerror(2);
+               }
+
+               // various checks
+               //this would change in pass2
+          }
+          deallocModule(mod); //The module is removed
+          currentModule += 1;
      } 
 }
 
