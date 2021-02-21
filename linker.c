@@ -1,7 +1,6 @@
 #include "stdio.h" //fopen, fclose, printf, getline
 #include "string.h" //strlen, strtok, strcpy
-#include "stdlib.h"
-#include "errno.h"
+#include "stdlib.h" //strtol, exit, free, malloc, realloc
 #include "ctype.h" //isdigit(), isalpha(), isalnum()
 
 //Definitions
@@ -231,6 +230,7 @@ char* getToken(){
                return NULL;
           }
           linenum += 1; //Read a line, increment line number
+          finalPosition = 1; //final position also reset
           token = strtok(linePtr, " \t\n"); //Parse the line
      }
 
@@ -435,7 +435,7 @@ void passTwo() {
                     }
                     //operand = index of symbol in uselist
                     //Rule 6 violated?
-                    if (operand > useList->size){
+                    if (operand >= useList->size){
                          errcode = 6;
                          break;
                     }
